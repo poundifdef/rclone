@@ -11,7 +11,7 @@ import (
 	"github.com/ncw/rclone/fs/accounting"
 	"github.com/ncw/rclone/lib/rest"
 
-        "github.com/gobuffalo/packr"
+        "github.com/gobuffalo/packr/v2"
 )
 
 // DirEntry is a directory entry
