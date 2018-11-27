@@ -14,12 +14,12 @@ require (
 	github.com/cpuguy83/go-md2man v1.0.8 // indirect
 	github.com/djherbis/times v1.1.0
 	github.com/dropbox/dropbox-sdk-go-unofficial v4.1.0+incompatible
-	github.com/gobuffalo/packr v1.21.5 // indirect
+	github.com/gobuffalo/buffalo-plugins v1.7.2 // indirect
+	github.com/gobuffalo/packr v1.21.5
 	github.com/goftp/file-driver v0.0.0-20180502053751-5d604a0fc0c9 // indirect
 	github.com/goftp/server v0.0.0-20180914132916-1fd52c8552f1
 	github.com/google/go-querystring v1.0.0 // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20181103185306-d547d1d9531e // indirect
-	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/jlaffaye/ftp v0.0.0-20181101112434-47f21d10f0ee
 	github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af // indirect
 	github.com/jtolds/gls v4.2.1+incompatible // indirect
@@ -46,7 +46,7 @@ require (
 	github.com/t3rm1n4l/go-mega v0.0.0-20180817194457-854bf31d998b
 	github.com/xanzy/ssh-agent v0.2.0
 	github.com/yunify/qingstor-sdk-go v2.2.15+incompatible
-	golang.org/x/crypto v0.0.0-20181112202954-3d3f9f413869
+	golang.org/x/crypto v0.0.0-20181126163421-e657309f52e7
 	golang.org/x/net v0.0.0-20181114220301-adae6a3d119a
 	golang.org/x/oauth2 v0.0.0-20181120190819-8f65e3013eba
 	golang.org/x/sys v0.0.0-20181122145206-62eef0e2fa9b
