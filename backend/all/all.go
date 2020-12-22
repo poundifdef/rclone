@@ -32,6 +32,7 @@ import (
 	_ "github.com/rclone/rclone/backend/premiumizeme"
 	_ "github.com/rclone/rclone/backend/putio"
 	_ "github.com/rclone/rclone/backend/qingstor"
+	_ "github.com/rclone/rclone/backend/remarkable"
 	_ "github.com/rclone/rclone/backend/s3"
 	_ "github.com/rclone/rclone/backend/seafile"
 	_ "github.com/rclone/rclone/backend/sftp"
