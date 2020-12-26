@@ -126,7 +126,7 @@ func (o *Object) Remove(ctx context.Context) error {
 func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, err error) {
 	//fmt.Println("Listing...", f.root, dirName, p)
 
-	dirEntries := []Object{}
+	dirEntries := []*Object{}
 
 	file1 := Object{
 		ID:     "1",
@@ -135,7 +135,7 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		Parent: "",
 		Type:   "FILE",
 	}
-	dirEntries = append(dirEntries, file1)
+	dirEntries = append(dirEntries, &file1)
 
 	file2 := Object{
 		ID:     "2",
@@ -144,7 +144,7 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		Parent: "",
 		Type:   "FILE",
 	}
-	dirEntries = append(dirEntries, file2)
+	dirEntries = append(dirEntries, &file2)
 
 	file3 := Object{
 		ID:     "3",
@@ -153,7 +153,7 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		Parent: "",
 		Type:   "FOLDER",
 	}
-	dirEntries = append(dirEntries, file3)
+	dirEntries = append(dirEntries, &file3)
 
 	file4 := Object{
 		ID:     "4",
@@ -162,7 +162,7 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		Parent: "",
 		Type:   "FOLDER",
 	}
-	dirEntries = append(dirEntries, file4)
+	dirEntries = append(dirEntries, &file4)
 
 	file5 := Object{
 		ID:     "5",
@@ -171,7 +171,7 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		Parent: "3",
 		Type:   "FILE",
 	}
-	dirEntries = append(dirEntries, file5)
+	dirEntries = append(dirEntries, &file5)
 	/*
 
 		dirEntry := fs.NewDir("Dir 3", time.Now()).SetID("3")
@@ -212,17 +212,61 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		}
 	*/
 
-	dirMap := make(map[string][]Object)
-	for _, d := range dirEntries {
-		dirMap[d.Parent] = append(dirMap[d.Parent], d)
+	/*
+		1 -> 2
+		2 -> 3
 
-		/*
-			fmt.Println("Remote..." + d.Remote())
-			if strings.HasPrefix(d.Remote(), p) {
-				rc = append(rc, d)
-			}
-		*/
+		3
+		parent = 2
+		append 2
+	*/
+
+	//dirMap := make(map[string][]Object)
+	dirMap := make(map[string]*Object)
+	for i, d := range dirEntries {
+		//dirMap[d.Parent] = append(dirMap[d.Parent], d)
+		dirMap[d.ID] = dirEntries[i]
 	}
+
+	dirLineage := make(map[string][]string)
+	for _, d := range dirEntries {
+		fullPath := []string{}
+		parent := d.Parent
+
+		for {
+			if parent == "" {
+				break
+			}
+
+			fullPath = append([]string{parent}, fullPath...)
+			parentObj, ok := dirMap[parent]
+			//fmt.Println(parentObj, ok, d.Name)
+			if !ok {
+				break
+			}
+			parent = parentObj.Parent
+
+		}
+		fullPath = append(fullPath, d.ID)
+		dirLineage[d.ID] = fullPath
+	}
+
+	flatFiles := make(map[string]*Object)
+	for _, lineage := range dirLineage {
+		path := ""
+		for i, node := range lineage {
+			path += dirMap[node].Name
+			if i < len(lineage)-1 {
+				path += "/"
+			}
+		}
+		flatFiles[path] = dirMap[lineage[len(lineage)-1]]
+
+		a := dirMap[lineage[len(lineage)-1]]
+		a.remote = path
+	}
+
+	//fmt.Println(flatFiles)
 
 	levels := []string{""}
 	if f.root != "" {
@@ -246,80 +290,138 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		}
 	}
 
+	rc := []fs.DirEntry{}
+	fullPath := strings.Join(levels, "/")
+	//fmt.Println(levels)
+	//fmt.Println(dirLineage)
+
+	if fullPath == "" {
+		for k, v := range dirLineage {
+			if len(v) == 1 {
+				f := dirMap[k]
+
+				if f.Type == "FILE" {
+					rc = append(rc, f)
+				}
+
+				if f.Type == "FOLDER" {
+					dirEntry := fs.NewDir(f.remote, time.Now()).SetID(f.ID)
+					//dirEntry := fs.NewDir(f.Name, time.Now()).SetID(f.ID)
+					rc = append(rc, dirEntry)
+				}
+			}
+		}
+
+	} else {
+		//fmt.Println(dirName, fullPath)
+		//fmt.Println(flatFiles)
+		if fullPath[0] == '/' {
+			fullPath = fullPath[1:]
+		}
+		thisPath, ok := flatFiles[fullPath]
+		if !ok {
+			return nil, fs.ErrorDirNotFound
+		}
+
+		if thisPath.Type == "FILE" {
+			rc = append(rc, thisPath)
+		}
+
+		if thisPath.Type == "FOLDER" {
+			for k1, v1 := range flatFiles {
+				if k1 == fullPath {
+					continue
+				}
+				if strings.HasPrefix(k1, fullPath) {
+					if v1.Type == "FILE" {
+						rc = append(rc, v1)
+					}
+					if v1.Type == "FOLDER" {
+						dirEntry := fs.NewDir(v1.remote, time.Now()).SetID(v1.ID)
+						rc = append(rc, dirEntry)
+					}
+
+				}
+			}
+		}
+	}
 	//fmt.Println(levels)
 	//fmt.Println(dirMap)
 	// a/b/c
 
-	parentAsset := Object{}
-	children := dirMap[""]
-	for j, asset := range children {
-		children[j].remote = asset.Name
-	}
-	for i, level := range levels {
-		if i == 0 {
-			continue
-		}
-
-		//fmt.Println(i, len(levels), len(children))
-		if i < len(levels) && len(children) == 0 {
-			return nil, fs.ErrorDirNotFound
-		}
-
+	/*
+		parentAsset := Object{}
+		children := dirMap[""]
 		for j, asset := range children {
-			remote := strings.Join(levels[1:i+1], "/")
-			remote = strings.TrimPrefix(remote, f.root)
-
-			if remote == "" {
-				remote = asset.Name
-			} else {
-				remote = remote + "/" + asset.Name
+			children[j].remote = asset.Name
+		}
+		for i, level := range levels {
+			if i == 0 {
+				continue
 			}
-			//fmt.Println(asset.Name, remote)
 
-			children[j].remote = remote
+			//fmt.Println(i, len(levels), len(children))
+			if i < len(levels) && len(children) == 0 {
+				return nil, fs.ErrorDirNotFound
+			}
 
-			if asset.Name == level {
-				parentAsset = asset
-				children = dirMap[asset.ID]
-				break
-			} else {
-				if j == len(children)-1 {
-					return nil, fs.ErrorDirNotFound
+			for j, asset := range children {
+					remote := strings.Join(levels[1:i+1], "/")
+					remote = strings.TrimPrefix(remote, f.root)
+
+					if remote == "" {
+						remote = asset.Name
+					} else {
+						remote = remote + "/" + asset.Name
+					}
+				//fmt.Println(asset.Name, remote)
+
+				//children[j].remote = remote
+
+				if asset.Name == level {
+					parentAsset = asset
+					children = dirMap[asset.ID]
+					break
+				} else {
+					if j == len(children)-1 {
+						return nil, fs.ErrorDirNotFound
+					}
 				}
 			}
 		}
-	}
+	*/
 
-	fmt.Println(parentAsset)
-	for _, v := range dirMap {
-		for _, a := range v {
-			fmt.Println(a.Name, a.remote)
+	//fmt.Println(parentAsset)
+	/*
+		for _, v := range dirMap {
+			for _, a := range v {
+				fmt.Println(a.Name, a.remote)
+			}
 		}
-	}
+	*/
 	//fmt.Println(parentAsset, children)
-	rc := []fs.DirEntry{}
-	if parentAsset.Type == "FILE" {
-		rc = append(rc, &parentAsset)
-	} else {
-		for _, child := range children {
-			if child.Type == "FILE" {
-				c := child
-				rc = append(rc, &c)
-			}
-			/*
-				if child.Type == "FOLDER" {
-					if parentAsset.Name == "" {
-						dirEntry := fs.NewDir(child.Name, time.Now()).SetID(child.ID)
-						rc = append(rc, dirEntry)
-					} //else {
-					//dirEntry := fs.NewDir(parentAsset.Name+"/"+child.Name, time.Now()).SetID(child.ID)
-					//rc = append(rc, dirEntry)
-
-					//}
+	/*
+		if parentAsset.Type == "FILE" {
+			rc = append(rc, &parentAsset)
+		} else {
+			for _, child := range children {
+				if child.Type == "FILE" {
+					c := child
+					rc = append(rc, &c)
 				}
-			*/
+					if child.Type == "FOLDER" {
+						if parentAsset.Name == "" {
+							dirEntry := fs.NewDir(child.Name, time.Now()).SetID(child.ID)
+							rc = append(rc, dirEntry)
+						} //else {
+						//dirEntry := fs.NewDir(parentAsset.Name+"/"+child.Name, time.Now()).SetID(child.ID)
+						//rc = append(rc, dirEntry)
+
+						//}
+					}
+			}
 		}
-	}
+	*/
 	/*
 		if dirName == "" {
 			newDirName := path.Join(dirName, "d1")
