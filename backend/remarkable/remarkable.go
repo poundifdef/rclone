@@ -54,10 +54,10 @@ type Object struct {
 	Parent            string
 
 	// internally used
-	fs         *Fs // what this object is part of
-	ParentName string
-	MD5        string
-	FileSize   int64
+	fs       *Fs // what this object is part of
+	MD5      string
+	FileSize int64
+	remote   string
 }
 
 // Fs represents a remote b2 server
@@ -68,6 +68,9 @@ type Fs struct {
 	srv           *rest.Client
 	root          string
 	fileListCache []*Object
+	dirLineage    map[string][]string
+	flatFiles     map[string]*Object
+	dirMap        map[string]*Object
 }
 
 func (f *Fs) Name() string {
@@ -140,66 +143,187 @@ func (o *Object) Remove(ctx context.Context) error {
 	return nil
 }
 
-func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, err error) {
-
-	// TODO: check errors
-	if f.fileListCache == nil {
-		log.Println("fetching file list...")
-		opts := rest.Opts{
-			Method:  "POST",
-			Path:    "/token/json/2/user/new",
-			RootURL: "https://my.remarkable.com",
-			ExtraHeaders: map[string]string{
-				"Authorization": "Bearer " + f.refresh,
-			},
-		}
-		resp, _ := f.srv.Call(ctx, &opts)
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
-		authToken := string(bodyBytes)
-		resp.Body.Close()
-
-		// TODO: use service discovery to check the root URL
-		v := url.Values{}
-		v.Set("withBlob", "true")
-		opts = rest.Opts{
-			Method:  "GET",
-			Path:    "/document-storage/json/2/docs",
-			RootURL: "https://document-storage-production-dot-remarkable-production.appspot.com",
-			ExtraHeaders: map[string]string{
-				"Authorization": "Bearer " + authToken,
-			},
-			Parameters: v,
-		}
-
-		rl := []*Object{}
-		resp, err = f.srv.CallJSON(ctx, &opts, nil, &rl)
-		f.fileListCache = rl
-		resp.Body.Close()
-
+func (f *Fs) generateFileTree() {
+	for i, d := range f.fileListCache {
+		f.dirMap[d.ID] = f.fileListCache[i]
 	}
 
-	dirEntries := []fs.DirEntry{}
+	for _, d := range f.fileListCache {
+		fullPath := []string{}
+		parent := d.Parent
 
-	if dirName == "" {
-		for i, rItem := range f.fileListCache {
-			if rItem.Parent == dirName {
-				if rItem.Type == "DocumentType" {
-					f.fileListCache[i].fs = f
-					f.fileListCache[i].ParentName = f.root
-					dirEntries = append(dirEntries, rItem)
+		for {
+			if parent == "" {
+				break
+			}
 
+			fullPath = append([]string{parent}, fullPath...)
+			parentObj, ok := f.dirMap[parent]
+			if !ok {
+				break
+			}
+			parent = parentObj.Parent
+
+		}
+		fullPath = append(fullPath, d.ID)
+		f.dirLineage[d.ID] = fullPath
+	}
+
+	for _, lineage := range f.dirLineage {
+		path := ""
+		for i, node := range lineage {
+			path += f.dirMap[node].VissibleName
+			if i < len(lineage)-1 {
+				path += "/"
+			}
+		}
+		f.flatFiles[path] = f.dirMap[lineage[len(lineage)-1]]
+
+		a := f.dirMap[lineage[len(lineage)-1]]
+		a.remote = path
+	}
+}
+
+func (f *Fs) refreshFiles(ctx context.Context) error {
+	// Fetch file list from Temarkable API
+
+	log.Println("fetching file list...")
+	opts := rest.Opts{
+		Method:  "POST",
+		Path:    "/token/json/2/user/new",
+		RootURL: "https://my.remarkable.com",
+		ExtraHeaders: map[string]string{
+			"Authorization": "Bearer " + f.refresh,
+		},
+	}
+	resp, _ := f.srv.Call(ctx, &opts)
+	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	authToken := string(bodyBytes)
+	resp.Body.Close()
+
+	// TODO: use service discovery to check the root URL
+	v := url.Values{}
+	v.Set("withBlob", "true")
+	opts = rest.Opts{
+		Method:  "GET",
+		Path:    "/document-storage/json/2/docs",
+		RootURL: "https://document-storage-production-dot-remarkable-production.appspot.com",
+		ExtraHeaders: map[string]string{
+			"Authorization": "Bearer " + authToken,
+		},
+		Parameters: v,
+	}
+
+	rl := []*Object{}
+	resp, err := f.srv.CallJSON(ctx, &opts, nil, &rl)
+	if err != nil {
+		return err
+	}
+	f.fileListCache = rl
+	resp.Body.Close()
+
+	for _, item := range f.fileListCache {
+		item.fs = f
+	}
+
+	trashObject := &Object{
+		ID:           "trash",
+		Parent:       "",
+		VissibleName: "Trash",
+		fs:           f,
+	}
+	f.fileListCache = append(f.fileListCache, trashObject)
+
+	f.generateFileTree()
+
+	/*
+		for k, _ := range f.flatFiles {
+			fmt.Println(k)
+		}
+	*/
+
+	return nil
+}
+func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, err error) {
+	// TODO: check errors
+	if f.fileListCache == nil {
+		err = f.refreshFiles(ctx)
+		if err != nil {
+			return
+		}
+	}
+
+	levels := []string{}
+	if f.root != "" {
+		if f.root[0] == '/' {
+			levels = append(levels, strings.Split(f.root[1:], "/")...)
+		} else {
+			levels = append(levels, strings.Split(f.root, "/")...)
+		}
+		if levels[len(levels)-1] == "" {
+			levels = levels[:len(levels)-1]
+		}
+	}
+	if dirName != "" {
+		if dirName[0] == '/' {
+			levels = append(levels, strings.Split(dirName[1:], "/")...)
+		} else {
+			levels = append(levels, strings.Split(dirName, "/")...)
+		}
+		if levels[len(levels)-1] == "" {
+			levels = levels[:len(levels)-1]
+		}
+	}
+
+	//rc := []fs.DirEntry{}
+	fullPath := strings.Join(levels, "/")
+
+	if fullPath == "" {
+		for k, v := range f.dirLineage {
+			if len(v) == 1 {
+				f := f.dirMap[k]
+
+				if f.Type == "DocumentType" {
+					entries = append(entries, f)
+				}
+
+				if f.Type == "CollectionType" {
+					dirEntry := fs.NewDir(f.remote, time.Now()).SetID(f.ID)
+					entries = append(entries, dirEntry)
+				}
+			}
+		}
+
+	} else {
+		thisPath, ok := f.flatFiles[fullPath]
+		if !ok {
+			return nil, fs.ErrorDirNotFound
+		}
+
+		if thisPath.Type == "DocumentType" {
+			entries = append(entries, thisPath)
+		}
+
+		if thisPath.Type == "CollectionType" {
+			for k1, v1 := range f.flatFiles {
+				if k1 == fullPath {
+					continue
+				}
+				if v1.remote == fullPath+"/"+v1.VissibleName {
+					if v1.Type == "DocumentType" {
+						entries = append(entries, v1)
+					}
+					if v1.Type == "CollectionType" {
+						dirEntry := fs.NewDir(v1.Remote(), time.Now()).SetID(v1.ID)
+						entries = append(entries, dirEntry)
+					}
 				}
 			}
 		}
 	}
-	/*
-		if dirName == "" {
-			newDirName := path.Join(dirName, "d1")
-			dirEntry := fs.NewDir(newDirName, time.Now()).SetID("2")
-			dirEntries = append(dirEntries, dirEntry)
-		}
-	*/
-	return dirEntries, nil
+
+	return
+	//return dirEntries, nil
 }
 
 func (o *Object) Fs() fs.Info {
@@ -212,10 +336,11 @@ func (o *Object) String() string {
 
 // Remote returns the remote path
 func (o *Object) Remote() string {
-	if o.Parent == "" {
+	if o.fs.root == o.remote {
 		return o.VissibleName
 	}
-	return o.ParentName + "/" + o.VissibleName
+
+	return strings.TrimPrefix(o.remote, o.fs.root+"/")
 }
 
 func (o *Object) getDetails() {
@@ -297,10 +422,13 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	refresh, _ := m.Get("refresh")
 
 	f := &Fs{
-		name:    name,
-		refresh: refresh,
-		srv:     rest.NewClient(fshttp.NewClient(ctx)),
-		root:    root,
+		name:       name,
+		refresh:    refresh,
+		srv:        rest.NewClient(fshttp.NewClient(ctx)),
+		root:       strings.Trim(root, "/"),
+		dirLineage: make(map[string][]string),
+		flatFiles:  make(map[string]*Object),
+		dirMap:     make(map[string]*Object),
 	}
 
 	// TODO: look at fs.go:505 (Features struct)
