@@ -40,6 +40,7 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.12.0
+	github.com/poundifdef/go-remarkable2pdf v0.2.0
 	github.com/prometheus/client_golang v1.8.0
 	github.com/putdotio/go-putio/putio v0.0.0-20200123120452-16d982cac2b8
 	github.com/rfjakob/eme v1.1.1

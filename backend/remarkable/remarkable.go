@@ -1,6 +1,7 @@
 package remarkable
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/rest"
+
+	rm2pdf "github.com/poundifdef/go-remarkable2pdf"
 )
 
 // Register with Fs
@@ -29,11 +32,17 @@ func init() {
 		// TODO: auto config this by taking one-time token
 
 		// Token returned when you first call POST /device/new
-		Options: []fs.Option{{
-			Name:     "refresh",
-			Help:     "Refresh token",
-			Required: true,
-		},
+		Options: []fs.Option{
+			{
+				Name:     "refresh",
+				Help:     "Refresh token",
+				Required: true,
+			},
+			{
+				Name:    "convert_to_pdf",
+				Help:    "Convert files to PDF. Default behavior is to sync the raw files from the API.",
+				Default: "false",
+			},
 		},
 	})
 }
@@ -65,6 +74,7 @@ type Fs struct {
 	name          string // name of this remote
 	features      *fs.Features
 	refresh       string
+	convertToPDF  string
 	srv           *rest.Client
 	root          string
 	fileListCache []*Object
@@ -79,7 +89,7 @@ func (f *Fs) Name() string {
 
 // Root of the remote (as passed into NewFs)
 func (f *Fs) Root() string {
-	return ""
+	return f.root
 }
 
 // String returns a description of the FS
@@ -94,6 +104,10 @@ func (f *Fs) Precision() time.Duration {
 
 // Returns the supported hash types of the filesystem
 func (f *Fs) Hashes() hash.Set {
+	if f.convertToPDF == "true" {
+		return hash.Set(hash.None)
+	}
+
 	return hash.Set(hash.MD5)
 }
 
@@ -136,7 +150,19 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadClo
 		RootURL: o.BlobURLGet,
 	}
 	resp, err := o.fs.srv.Call(context.TODO(), &opts)
-	return resp.Body, err
+
+	if o.fs.convertToPDF == "false" {
+		return resp.Body, err
+	}
+
+	inputBytes, _ := ioutil.ReadAll(resp.Body)
+	var buf bytes.Buffer
+
+	err = rm2pdf.RenderRmNotebookFromBytes(inputBytes, &buf)
+	if err != nil {
+		return nil, err
+	}
+	return ioutil.NopCloser(bytes.NewReader(buf.Bytes())), nil
 }
 
 func (o *Object) Remove(ctx context.Context) error {
@@ -231,16 +257,11 @@ func (f *Fs) refreshFiles(ctx context.Context) error {
 		Parent:       "",
 		VissibleName: "Trash",
 		fs:           f,
+		Type:         "CollectionType",
 	}
 	f.fileListCache = append(f.fileListCache, trashObject)
 
 	f.generateFileTree()
-
-	/*
-		for k, _ := range f.flatFiles {
-			fmt.Println(k)
-		}
-	*/
 
 	return nil
 }
@@ -275,7 +296,6 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 		}
 	}
 
-	//rc := []fs.DirEntry{}
 	fullPath := strings.Join(levels, "/")
 
 	if fullPath == "" {
@@ -323,7 +343,6 @@ func (f *Fs) List(ctx context.Context, dirName string) (entries fs.DirEntries, e
 	}
 
 	return
-	//return dirEntries, nil
 }
 
 func (o *Object) Fs() fs.Info {
@@ -376,6 +395,10 @@ func (o *Object) ModTime(ctx context.Context) time.Time {
 
 // Size returns the size of the file
 func (o *Object) Size() int64 {
+	if o.fs.convertToPDF == "true" {
+		return -1
+	}
+
 	if o.FileSize == 0 {
 		o.getDetails()
 	}
@@ -385,6 +408,10 @@ func (o *Object) Size() int64 {
 // Hash returns the selected checksum of the file
 // If no checksum is available it returns ""
 func (o *Object) Hash(ctx context.Context, ty hash.Type) (string, error) {
+	if o.fs.convertToPDF == "true" {
+		return "", hash.ErrUnsupported
+	}
+
 	if o.FileSize == 0 {
 		o.getDetails()
 	}
@@ -420,15 +447,17 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
 	// TODO: check for errors, return an error if we can't instantiate
 	refresh, _ := m.Get("refresh")
+	convertToPDF, _ := m.Get("convert_to_pdf")
 
 	f := &Fs{
-		name:       name,
-		refresh:    refresh,
-		srv:        rest.NewClient(fshttp.NewClient(ctx)),
-		root:       strings.Trim(root, "/"),
-		dirLineage: make(map[string][]string),
-		flatFiles:  make(map[string]*Object),
-		dirMap:     make(map[string]*Object),
+		name:         name,
+		refresh:      refresh,
+		convertToPDF: convertToPDF,
+		srv:          rest.NewClient(fshttp.NewClient(ctx)),
+		root:         strings.Trim(root, "/"),
+		dirLineage:   make(map[string][]string),
+		flatFiles:    make(map[string]*Object),
+		dirMap:       make(map[string]*Object),
 	}
 
 	// TODO: look at fs.go:505 (Features struct)
